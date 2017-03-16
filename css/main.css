@@ -229,6 +229,9 @@ h6 {
   display: block;
   margin-bottom: 20px;
 }
+.articleBody img {
+  max-width: 100%;
+}
 .articleBody > table {
   border: 1px solid #666;
   border-collapse: collapse;

